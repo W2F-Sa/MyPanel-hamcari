@@ -1,0 +1,10 @@
+node_modules/
+data/
+*.log
+*.tmp
+.DS_Store
+npm-debug.log*
+data/config.json
+data/panel.db
+data/panel.db-*
+data/certs/

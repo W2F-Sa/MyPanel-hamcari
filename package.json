@@ -1,0 +1,20 @@
+{
+  "name": "mypanel-hamcari",
+  "version": "1.0.0",
+  "description": "Secure multi-tenant reseller panel for 3x-ui (Sanaei) panels — separate admin & reseller portals, integer-only GB credit/pricing, multi-panel management.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "init": "node src/cli/initConfig.js",
+    "reset-admin": "node src/cli/resetAdmin.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0"
+  },
+  "license": "MIT"
+}
