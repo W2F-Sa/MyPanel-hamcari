@@ -41,6 +41,7 @@ import {
   getUserDetails,
 } from '../services/users.js';
 import { getDb } from '../lib/db.js';
+import { listPlans, createPlan, updatePlan, deletePlan } from '../services/plans.js';
 import { audit, listAudit } from '../lib/audit.js';
 import { asString, asInt, asBool, asIntArray, asEmailKey } from '../lib/validate.js';
 import { loadConfig } from '../config.js';
@@ -289,6 +290,44 @@ export function buildAdminRouter() {
   r.get('/api/audit', (ctx) => {
     requireAdmin(ctx);
     ctx.ok(listAudit(200));
+  });
+
+  // ---- plans (admin-defined durations) ----
+  r.get('/api/plans', (ctx) => {
+    requireAdmin(ctx);
+    ctx.ok(listPlans());
+  });
+
+  r.post('/api/plans', (ctx) => {
+    requireAdmin(ctx);
+    const name = asString(ctx.body.name, 'name', { max: 48 });
+    const days = asInt(ctx.body.days, 'days', { min: 1, max: 3650 });
+    const enabled = asBool(ctx.body.enabled, true);
+    const sortOrder = asInt(ctx.body.sortOrder, 'sortOrder', { min: 0, def: 0 });
+    const plan = createPlan({ name, days, enabled, sortOrder });
+    audit('admin', 'plan_create', { id: plan.id, name, days }, ctx.clientIp());
+    ctx.ok(plan, 'Plan created');
+  });
+
+  r.post('/api/plans/:id', (ctx) => {
+    requireAdmin(ctx);
+    const id = asInt(ctx.params.id, 'id');
+    const patch = {};
+    if (ctx.body.name !== undefined) patch.name = asString(ctx.body.name, 'name', { max: 48 });
+    if (ctx.body.days !== undefined) patch.days = asInt(ctx.body.days, 'days', { min: 1, max: 3650 });
+    if (ctx.body.enabled !== undefined) patch.enabled = asBool(ctx.body.enabled);
+    if (ctx.body.sortOrder !== undefined) patch.sortOrder = asInt(ctx.body.sortOrder, 'sortOrder', { min: 0 });
+    const plan = updatePlan(id, patch);
+    audit('admin', 'plan_update', { id }, ctx.clientIp());
+    ctx.ok(plan, 'Plan updated');
+  });
+
+  r.post('/api/plans/:id/delete', (ctx) => {
+    requireAdmin(ctx);
+    const id = asInt(ctx.params.id, 'id');
+    deletePlan(id);
+    audit('admin', 'plan_delete', { id }, ctx.clientIp());
+    ctx.ok(null, 'Plan deleted');
   });
 
   return r;

@@ -71,6 +71,7 @@
     { id: 'dashboard', label: 'داشبورد', icon: 'dash' },
     { id: 'panels', label: 'پنل‌ها', icon: 'server' },
     { id: 'resellers', label: 'نمایندگان', icon: 'users' },
+    { id: 'plans', label: 'پلن‌ها', icon: 'coin' },
     { id: 'users', label: 'کاربران', icon: 'user' },
     { id: 'audit', label: 'گزارش فعالیت', icon: 'log' },
     { id: 'settings', label: 'تنظیمات', icon: 'gear' },
@@ -142,6 +143,7 @@
       if (view === 'dashboard') await viewDashboard(c);
       else if (view === 'panels') await viewPanels(c);
       else if (view === 'resellers') await viewResellers(c);
+      else if (view === 'plans') await viewPlans(c);
       else if (view === 'users') await viewUsers(c);
       else if (view === 'audit') await viewAudit(c);
       else if (view === 'settings') await viewSettings(c);
@@ -586,6 +588,65 @@
       try {
         await api('POST', `/api/users/${user.id}/renew`, { addGb, addDays });
         toast('کاربر به‌روزرسانی شد', 'ok'); back._close(true); go('users');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  // ---------- Plans ----------
+  async function viewPlans(c) {
+    const plans = await api('GET', '/api/plans');
+    c.innerHTML = `
+      <div class="card">
+        <div class="card-h">${ICON.coin}<h3>پلن‌ها (مدت‌زمان‌ها)</h3><div class="grow"></div>
+          <button class="btn btn-primary btn-sm" id="add-plan">${ICON.plus}پلن جدید</button></div>
+        <p class="hint">مدت‌زمان هر پلن را شما تعیین می‌کنید؛ نماینده هنگام ساخت کاربر فقط پلن را انتخاب می‌کند و حجم را خودش وارد می‌کند.</p>
+        <div class="tbl-wrap">${
+          !plans.length ? `<div class="empty">${ICON.coin}<div>هنوز پلنی تعریف نشده است</div></div>` :
+          `<table><thead><tr><th>نام</th><th>مدت (روز)</th><th>وضعیت</th><th></th></tr></thead><tbody>
+          ${plans.map((p) => `<tr>
+            <td><b>${esc(p.name)}</b></td>
+            <td>${faNum(p.days)} روز</td>
+            <td>${p.enabled ? '<span class="badge on">فعال</span>' : '<span class="badge off">غیرفعال</span>'}</td>
+            <td class="t-actions">
+              <button class="btn btn-sm icon-btn" data-edit="${p.id}" title="ویرایش">${ICON.edit}</button>
+              <button class="btn btn-sm icon-btn btn-ghost" data-del="${p.id}" title="حذف">${ICON.trash}</button>
+            </td></tr>`).join('')}</tbody></table>`
+        }</div>
+      </div>`;
+    document.getElementById('add-plan').onclick = () => planModal(null);
+    c.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => planModal(plans.find((x) => x.id == b.dataset.edit)));
+    c.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+      const p = plans.find((x) => x.id == b.dataset.del);
+      if (await confirmDialog('حذف پلن', `پلن «${p.name}» حذف شود؟ (کاربران موجود تغییری نمی‌کنند)`)) {
+        try { await api('POST', `/api/plans/${p.id}/delete`); toast('پلن حذف شد', 'ok'); go('plans'); }
+        catch (e) { toast(e.message, 'err'); }
+      }
+    });
+  }
+
+  function planModal(p) {
+    const isEdit = !!p;
+    modal({
+      title: isEdit ? 'ویرایش پلن' : 'پلن جدید',
+      bodyHtml: `
+        <form id="plan-form">
+          <div class="field"><label>نام پلن</label><input class="input" name="name" value="${esc(p?.name || '')}" required placeholder="مثلاً یک‌ماهه" /></div>
+          <div class="field"><label>مدت (روز، عدد صحیح)</label><input class="input" name="days" type="number" step="1" min="1" value="${p?.days ?? 30}" required /></div>
+          <label class="switch"><input type="checkbox" name="enabled" ${(!isEdit || p.enabled) ? 'checked' : ''}/><span class="track"></span><span>پلن فعال باشد</span></label>
+        </form>`,
+      footHtml: `<button class="btn btn-primary" id="plan-save">${isEdit ? 'ذخیره' : 'ساخت'}</button><button class="btn btn-ghost" data-close>انصراف</button>`,
+    });
+    const back = modal._last;
+    const form = back.querySelector('#plan-form');
+    back.querySelector('#plan-save').onclick = async () => {
+      const body = { name: form.name.value.trim(), days: parseInt(form.days.value, 10), enabled: form.enabled.checked };
+      if (!body.name) return toast('نام را وارد کنید', 'err');
+      if (!body.days || body.days < 1) return toast('مدت معتبر وارد کنید', 'err');
+      try {
+        if (isEdit) await api('POST', `/api/plans/${p.id}`, body);
+        else await api('POST', '/api/plans', body);
+        toast(isEdit ? 'پلن به‌روزرسانی شد' : 'پلن ساخته شد', 'ok');
+        back._close(true); go('plans');
       } catch (e) { toast(e.message, 'err'); }
     };
   }

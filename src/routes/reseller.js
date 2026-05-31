@@ -14,6 +14,7 @@ import {
   getUserDetails,
 } from '../services/users.js';
 import { getPanelRow, clientForPanel } from '../services/panels.js';
+import { listPlans, getPlanRow } from '../services/plans.js';
 import { audit } from '../lib/audit.js';
 import { asString, asInt, asBool } from '../lib/validate.js';
 
@@ -121,6 +122,11 @@ export function buildResellerRouter() {
     ctx.ok(enriched);
   });
 
+  r.get('/api/plans', (ctx) => {
+    requireReseller(ctx);
+    ctx.ok(listPlans({ enabledOnly: true }));
+  });
+
   r.get('/api/users', (ctx) => {
     const reseller = requireReseller(ctx);
     ctx.ok(listUsersForReseller(reseller.id));
@@ -130,10 +136,10 @@ export function buildResellerRouter() {
     const reseller = requireReseller(ctx);
     const name = asString(ctx.body.name, 'name', { required: false, max: 48 });
     const gb = asInt(ctx.body.gb, 'gb', { min: 1, max: reseller.max_gb });
-    const days = asInt(ctx.body.days, 'days', { min: 0, max: 3650, def: reseller.default_days });
+    const planId = asInt(ctx.body.planId, 'planId', { min: 1 });
     const limitIp = asInt(ctx.body.limitIp, 'limitIp', { min: 0, max: 1000, def: reseller.default_limit_ip || 0 });
-    const result = await createUserForReseller(reseller.id, { name, gb, days, limitIp }, `reseller:${reseller.id}`);
-    audit(`reseller:${reseller.id}`, 'user_create', { email: result.user.email, gb, days }, ctx.clientIp());
+    const result = await createUserForReseller(reseller.id, { name, gb, planId, limitIp }, `reseller:${reseller.id}`);
+    audit(`reseller:${reseller.id}`, 'user_create', { email: result.user.email, gb, planId }, ctx.clientIp());
     // include links right away
     let links = [];
     try {
@@ -155,7 +161,13 @@ export function buildResellerRouter() {
     const reseller = requireReseller(ctx);
     const id = asInt(ctx.params.id, 'id');
     const addGb = asInt(ctx.body.addGb, 'addGb', { min: 0, max: reseller.max_gb, def: 0 });
-    const addDays = asInt(ctx.body.addDays, 'addDays', { min: 0, max: 3650, def: 0 });
+    // Duration extension comes from a plan (admin-controlled), not free input.
+    let addDays = 0;
+    if (ctx.body.planId) {
+      const plan = getPlanRow(asInt(ctx.body.planId, 'planId', { min: 1 }));
+      if (!plan || !plan.enabled) return ctx.fail('Invalid plan', 400);
+      addDays = plan.days;
+    }
     if (addGb === 0 && addDays === 0) return ctx.fail('Nothing to add', 400);
     const result = await renewUser(id, { addGb, addDays }, `reseller:${reseller.id}`, { reseller });
     audit(`reseller:${reseller.id}`, 'user_renew', { id, addGb, addDays }, ctx.clientIp());

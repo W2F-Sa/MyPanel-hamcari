@@ -7,6 +7,7 @@ import { getDb, now } from '../lib/db.js';
 import { HttpError } from '../lib/http.js';
 import { getResellerRow, adjustBalance } from './resellers.js';
 import { getPanelRow, clientForPanel } from './panels.js';
+import { getPlanRow } from './plans.js';
 import { gbToBytes, daysToExpiry, bytesToGb } from '../lib/validate.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -61,6 +62,8 @@ function publicUser(row) {
     expiryTime: row.expiry_time,
     cost: row.cost,
     status: row.status,
+    planId: row.plan_id || 0,
+    planName: row.plan_name || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -83,7 +86,7 @@ export function listAllUsers() {
 }
 
 // Create a VPN user for a reseller.
-// data: { name, gb, days, limitIp? }
+// data: { name, gb, planId, limitIp? }  — duration comes from the admin-defined plan.
 export async function createUserForReseller(resellerId, data, actor) {
   const reseller = getResellerRow(resellerId);
   if (!reseller) throw new HttpError(404, 'Reseller not found');
@@ -102,8 +105,13 @@ export async function createUserForReseller(resellerId, data, actor) {
   }
   if (!allowed.length) throw new HttpError(400, 'No inbounds are assigned to this reseller');
 
+  // Duration is dictated by the selected plan (admin-controlled).
+  const plan = getPlanRow(data.planId);
+  if (!plan) throw new HttpError(400, 'Invalid plan');
+  if (!plan.enabled) throw new HttpError(400, 'Selected plan is disabled');
+  const days = plan.days;
+
   const gb = data.gb;
-  const days = data.days;
   const cost = gb * reseller.price_per_gb; // integers => integer
 
   if (reseller.balance < cost) {
@@ -156,8 +164,8 @@ export async function createUserForReseller(resellerId, data, actor) {
       const info = db
         .prepare(
           `INSERT INTO vpn_users
-           (reseller_id, panel_id, email, sub_id, uuid, inbound_ids, gb, days, expiry_time, cost, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+           (reseller_id, panel_id, email, sub_id, uuid, inbound_ids, gb, days, expiry_time, cost, status, plan_id, plan_name, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`
         )
         .run(
           resellerId,
@@ -170,6 +178,8 @@ export async function createUserForReseller(resellerId, data, actor) {
           days,
           client.expiryTime,
           cost,
+          plan.id,
+          plan.name,
           ts,
           ts
         );
@@ -221,6 +231,9 @@ export async function renewUser(userId, { addGb = 0, addDays = 0 }, actor, { res
 
   const updated = {
     ...client,
+    // The update endpoint expects the protocol secret in `id` as a string
+    // (the get endpoint returns the numeric DB id there instead).
+    id: client.uuid || (typeof client.id === 'string' ? client.id : ''),
     totalGB: gbToBytes(newGb),
     expiryTime: newExpiry,
     enable: true,

@@ -44,6 +44,16 @@ function migrate(d) {
       updated_at    INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS plans (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      days        INTEGER NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS resellers (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       name              TEXT NOT NULL,
@@ -77,6 +87,8 @@ function migrate(d) {
       expiry_time  INTEGER NOT NULL DEFAULT 0,
       cost         INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active',
+      plan_id      INTEGER DEFAULT 0,
+      plan_name    TEXT DEFAULT '',
       created_at   INTEGER NOT NULL,
       updated_at   INTEGER NOT NULL,
       FOREIGN KEY (reseller_id) REFERENCES resellers(id) ON DELETE CASCADE
@@ -127,6 +139,19 @@ function migrate(d) {
     );
     CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(scope, ip, created_at);
   `);
+
+  // Lightweight column migrations for DBs created by older versions.
+  ensureColumn(d, 'vpn_users', 'plan_id', 'plan_id INTEGER DEFAULT 0');
+  ensureColumn(d, 'vpn_users', 'plan_name', "plan_name TEXT DEFAULT ''");
+  ensureColumn(d, 'panels', 'insecure', 'insecure INTEGER NOT NULL DEFAULT 0');
+}
+
+// Adds a column if it does not already exist (SQLite has no IF NOT EXISTS for columns).
+function ensureColumn(d, table, column, ddl) {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
 }
 
 export function getSetting(key, fallback = null) {

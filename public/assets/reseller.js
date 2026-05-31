@@ -140,27 +140,36 @@
 
   // ---------- Create ----------
   async function viewCreate(c) {
-    if (!inboundsCache.length) { try { inboundsCache = await api('GET', '/api/inbounds'); } catch (e) {} }
+    let plans = [];
+    try { plans = await api('GET', '/api/plans'); } catch (e) {}
     const maxGb = ME.maxGb || 100;
     const price = ME.pricePerGb || 0;
+    if (!plans.length) {
+      c.innerHTML = `<div class="card"><div class="empty">${ICON.coin}<div>هنوز پلنی توسط مدیر تعریف نشده است.<br>تا تعریف پلن، امکان ساخت کاربر نیست.</div></div></div>`;
+      return;
+    }
+    const initGb = Math.min(10, maxGb);
     c.innerHTML = `
       <div class="card" style="max-width:620px">
         <div class="card-h">${ICON.plus}<h3>ساخت کاربر جدید</h3></div>
         <form id="create-form">
           <div class="field"><label>نام کاربر (اختیاری)</label><input class="input mono" name="name" placeholder="مثلاً ali یا خالی برای نام تصادفی" dir="ltr" /></div>
+          <div class="field"><label>پلن (مدت‌زمان)</label>
+            <select name="planId" id="plan-sel">
+              ${plans.map((p) => `<option value="${p.id}">${esc(p.name)} — ${faNum(p.days)} روز</option>`).join('')}
+            </select>
+            <div class="hint">مدت‌زمان توسط مدیر تعیین شده است.</div>
+          </div>
           <div class="field"><label>حجم (گیگابایت)</label>
             <div class="gb-pick">
-              <input type="range" id="gb-range" min="1" max="${maxGb}" step="1" value="${Math.min(10, maxGb)}" />
-              <input class="input gb-val" id="gb-num" type="number" min="1" max="${maxGb}" step="1" value="${Math.min(10, maxGb)}" style="min-width:90px" />
+              <input type="range" id="gb-range" min="1" max="${maxGb}" step="1" value="${initGb}" />
+              <input class="input gb-val" id="gb-num" type="number" min="1" max="${maxGb}" step="1" value="${initGb}" style="min-width:90px" />
             </div>
             <div class="hint">حداکثر ${faNum(maxGb)} گیگ — فقط عدد صحیح</div>
           </div>
-          <div class="row-2">
-            <div class="field"><label>مدت (روز) — صفر = نامحدود</label><input class="input" name="days" type="number" min="0" step="1" value="${ME.defaultDays ?? 30}" /></div>
-            <div class="field"><label>محدودیت IP — صفر = نامحدود</label><input class="input" name="limitIp" type="number" min="0" step="1" value="${ME.defaultLimitIp ?? 0}" /></div>
-          </div>
-          <div class="cost-line"><span>هزینه‌ی این کاربر</span><b id="cost">${money(Math.min(10, maxGb) * price)}</b></div>
-          <div class="cost-line mt"><span>اعتبار باقی‌مانده پس از ساخت</span><b id="after">${money(ME.balance - Math.min(10, maxGb) * price)}</b></div>
+          <div class="field"><label>محدودیت IP — صفر = نامحدود</label><input class="input" name="limitIp" type="number" min="0" step="1" value="${ME.defaultLimitIp ?? 0}" /></div>
+          <div class="cost-line"><span>هزینه‌ی این کاربر</span><b id="cost">${money(initGb * price)}</b></div>
+          <div class="cost-line mt"><span>اعتبار باقی‌مانده پس از ساخت</span><b id="after">${money(ME.balance - initGb * price)}</b></div>
           <button class="btn btn-primary mt" type="submit" style="width:100%">${ICON.plus}ساخت کاربر</button>
         </form>
       </div>`;
@@ -182,14 +191,14 @@
       e.preventDefault();
       const f = e.target; const btn = f.querySelector('button[type=submit]');
       const gb = parseInt(num.value, 10);
-      const days = parseInt(f.days.value, 10) || 0;
+      const planId = parseInt(f.planId.value, 10);
       const limitIp = parseInt(f.limitIp.value, 10) || 0;
       if (!gb || gb < 1) return toast('حجم معتبر وارد کنید', 'err');
+      if (!planId) return toast('یک پلن انتخاب کنید', 'err');
       if (gb * price > ME.balance) return toast('اعتبار کافی نیست', 'err');
       btn.disabled = true; btn.innerHTML = ICON.refresh + 'در حال ساخت...';
       try {
-        const r = await api('POST', '/api/users', { name: f.name.value.trim(), gb, days, limitIp });
-        // refresh balance
+        const r = await api('POST', '/api/users', { name: f.name.value.trim(), gb, planId, limitIp });
         try { const me = await api('GET', '/api/me'); ME = me.identity; refreshBalanceBadge(); } catch (e2) {}
         showCreated(r.user, r.links);
       } catch (err) { toast(err.message, 'err'); btn.disabled = false; btn.innerHTML = ICON.plus + 'ساخت کاربر'; }
@@ -227,9 +236,10 @@
         <button class="btn btn-primary btn-sm" id="new-user">${ICON.plus}کاربر جدید</button></div>
       <div class="tbl-wrap">${
         !users.length ? `<div class="empty">${ICON.users}<div>هنوز کاربری نساخته‌اید</div></div>` :
-        `<table><thead><tr><th>ایمیل</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th></tr></thead><tbody>
+        `<table><thead><tr><th>ایمیل</th><th>پلن</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th></tr></thead><tbody>
         ${users.map((u) => `<tr>
           <td class="mono">${esc(u.email)}</td>
+          <td>${u.planName ? `<span class="badge">${esc(u.planName)}</span>` : '—'}</td>
           <td>${faNum(u.gb)}</td>
           <td>${fmtDate(u.expiryTime)}</td>
           <td class="nowrap">${money(u.cost)}</td>
@@ -274,17 +284,22 @@
     } catch (e) { toast(e.message, 'err'); }
   }
 
-  function renewModal(id) {
+  async function renewModal(id) {
     const price = ME.pricePerGb || 0;
+    let plans = [];
+    try { plans = await api('GET', '/api/plans'); } catch (e) {}
     modal({
       title: 'شارژ مجدد کاربر',
       bodyHtml: `
-        <div class="row-2">
-          <div class="field"><label>افزودن گیگ</label><input class="input" id="add-gb" type="number" min="0" step="1" value="0" /></div>
-          <div class="field"><label>افزودن روز</label><input class="input" id="add-days" type="number" min="0" step="1" value="0" /></div>
+        <div class="field"><label>تمدید مدت (پلن) — اختیاری</label>
+          <select id="renew-plan">
+            <option value="">— بدون تمدید زمان —</option>
+            ${plans.map((p) => `<option value="${p.id}">${esc(p.name)} — ${faNum(p.days)} روز</option>`).join('')}
+          </select>
         </div>
+        <div class="field"><label>افزودن حجم (گیگ)</label><input class="input" id="add-gb" type="number" min="0" step="1" value="0" /></div>
         <div class="cost-line"><span>هزینه</span><b id="rcost">${money(0)}</b></div>
-        <p class="hint">اعداد صحیح. هزینه‌ی گیگ اضافه از اعتبار شما کسر می‌شود.</p>`,
+        <p class="hint">اعداد صحیح. هزینه فقط بابت حجم اضافه‌شده است؛ مدت‌زمان از پلن انتخاب می‌شود.</p>`,
       footHtml: `<button class="btn btn-primary" id="renew-go">اعمال</button><button class="btn btn-ghost" data-close>انصراف</button>`,
     });
     const back = modal._last;
@@ -292,10 +307,10 @@
     back.querySelector('#add-gb').oninput = upd;
     back.querySelector('#renew-go').onclick = async () => {
       const addGb = parseInt(back.querySelector('#add-gb').value, 10) || 0;
-      const addDays = parseInt(back.querySelector('#add-days').value, 10) || 0;
-      if (!addGb && !addDays) return toast('مقداری وارد کنید', 'err');
+      const planId = back.querySelector('#renew-plan').value ? parseInt(back.querySelector('#renew-plan').value, 10) : null;
+      if (!addGb && !planId) return toast('پلن یا حجم را انتخاب کنید', 'err');
       try {
-        await api('POST', `/api/users/${id}/renew`, { addGb, addDays });
+        await api('POST', `/api/users/${id}/renew`, { addGb, planId });
         try { const me = await api('GET', '/api/me'); ME = me.identity; refreshBalanceBadge(); } catch (e) {}
         toast('انجام شد', 'ok'); back._close(true); go('users');
       } catch (e) { toast(e.message, 'err'); }
