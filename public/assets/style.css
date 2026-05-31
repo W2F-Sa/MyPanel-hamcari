@@ -59,6 +59,20 @@
 
 * { box-sizing: border-box; }
 
+/* Global icon sizing — every inline SVG defaults to a sane, text-relative size
+   so icons can never render at their huge intrinsic dimensions. More specific
+   rules below (.btn svg, .nav-item svg, ...) override this where needed. */
+svg {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  vertical-align: -0.18em;
+}
+.card-h > svg { width: 20px; height: 20px; color: var(--brand-3); }
+.badge svg { width: 13px; height: 13px; }
+.cost-line svg { width: 18px; height: 18px; }
+.link-tag svg { width: 14px; height: 14px; }
+
 html, body { height: 100%; }
 
 body {
