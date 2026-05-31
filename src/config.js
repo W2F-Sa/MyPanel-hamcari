@@ -50,7 +50,7 @@ export function defaultConfig() {
     encryptionKey: crypto.randomBytes(32).toString('hex'), // 256-bit AES key (hex)
 
     // Sessions
-    sessionTtlHours: 12,
+    sessionTtlHours: 48,
 
     // Security knobs
     loginMaxAttempts: 6,

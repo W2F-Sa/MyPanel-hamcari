@@ -1,13 +1,22 @@
 // Authentication middleware. Resolves the session cookie into ctx.session and
 // guards admin / reseller routes.
 
-import { getSession, SESSION_COOKIE } from '../lib/sessions.js';
+import { getSession } from '../lib/sessions.js';
+import { sessionCookieName } from '../routes/helpers.js';
 import { HttpError } from '../lib/http.js';
 import { getResellerRow } from '../services/resellers.js';
 
 export function resolveSession(ctx) {
-  const raw = ctx.cookies[SESSION_COOKIE];
+  // Cookie name is namespaced per portal so admin/reseller don't collide.
+  const name = ctx.portal ? sessionCookieName(ctx.portal) : null;
+  const raw = name ? ctx.cookies[name] : null;
   const row = getSession(raw);
+  // Guard against a session cookie from the other portal being replayed here.
+  if (row && ctx.portal && row.kind !== ctx.portal) {
+    ctx.session = null;
+    ctx.rawSessionId = null;
+    return null;
+  }
   ctx.session = row || null;
   ctx.rawSessionId = raw || null;
   return row;

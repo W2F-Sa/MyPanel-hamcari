@@ -28,7 +28,7 @@
       opts.body = JSON.stringify(body);
     }
     if (!/^get$/i.test(method)) {
-      const csrf = getCookie('mp_csrf');
+      const csrf = getCookie('mp_csrf_' + PORTAL);
       if (csrf) opts.headers['X-CSRF-Token'] = csrf;
     }
     let res;

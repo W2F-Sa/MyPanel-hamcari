@@ -37,6 +37,7 @@ function migrate(d) {
       api_token_enc TEXT NOT NULL,
       enabled       INTEGER NOT NULL DEFAULT 1,
       insecure      INTEGER NOT NULL DEFAULT 0,
+      sub_base      TEXT DEFAULT '',
       last_status   TEXT DEFAULT 'unknown',
       last_error    TEXT DEFAULT '',
       last_checked  INTEGER DEFAULT 0,
@@ -66,6 +67,7 @@ function migrate(d) {
       balance           INTEGER NOT NULL DEFAULT 0,
       default_days      INTEGER NOT NULL DEFAULT 30,
       max_gb            INTEGER NOT NULL DEFAULT 100,
+      min_gb            INTEGER NOT NULL DEFAULT 1,
       default_limit_ip  INTEGER NOT NULL DEFAULT 0,
       enabled           INTEGER NOT NULL DEFAULT 1,
       note              TEXT DEFAULT '',
@@ -144,6 +146,10 @@ function migrate(d) {
   ensureColumn(d, 'vpn_users', 'plan_id', 'plan_id INTEGER DEFAULT 0');
   ensureColumn(d, 'vpn_users', 'plan_name', "plan_name TEXT DEFAULT ''");
   ensureColumn(d, 'panels', 'insecure', 'insecure INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(d, 'panels', 'sub_base', "sub_base TEXT DEFAULT ''");
+  ensureColumn(d, 'resellers', 'min_gb', 'min_gb INTEGER NOT NULL DEFAULT 1');
+  // Helpful composite index for paginated, ordered per-reseller listing.
+  d.exec('CREATE INDEX IF NOT EXISTS idx_vpn_users_reseller_id_desc ON vpn_users(reseller_id, id DESC)');
 }
 
 // Adds a column if it does not already exist (SQLite has no IF NOT EXISTS for columns).

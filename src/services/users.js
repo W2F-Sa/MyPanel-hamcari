@@ -4,9 +4,10 @@
 // portal can list/charge without re-reading the whole panel.
 
 import { getDb, now } from '../lib/db.js';
+import crypto from 'node:crypto';
 import { HttpError } from '../lib/http.js';
 import { getResellerRow, adjustBalance } from './resellers.js';
-import { getPanelRow, clientForPanel } from './panels.js';
+import { getPanelRow, clientForPanel, buildSubUrl } from './panels.js';
 import { getPlanRow } from './plans.js';
 import { gbToBytes, daysToExpiry, bytesToGb } from '../lib/validate.js';
 
@@ -80,9 +81,41 @@ export function listUsersForReseller(resellerId) {
   return rows.map(publicUser);
 }
 
+// Server-side paginated + searchable listing. Keeps payloads small for panels
+// with tens of thousands of users. resellerId=null returns all (admin view).
+export function listUsersPaged({ resellerId = null, page = 1, pageSize = 25, search = '' } = {}) {
+  const db = getDb();
+  const size = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
+  const pg = Math.max(parseInt(page, 10) || 1, 1);
+  const where = [];
+  const params = [];
+  if (resellerId != null) {
+    where.push('reseller_id = ?');
+    params.push(resellerId);
+  }
+  if (search) {
+    where.push('(email LIKE ? OR plan_name LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const total = db.prepare(`SELECT COUNT(*) AS c FROM vpn_users ${whereSql}`).get(...params).c;
+  const rows = db
+    .prepare(`SELECT * FROM vpn_users ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .all(...params, size, (pg - 1) * size);
+  return { items: rows.map(publicUser), total, page: pg, pageSize: size };
+}
+
 export function listAllUsers() {
   const rows = getDb().prepare('SELECT * FROM vpn_users ORDER BY id DESC').all();
   return rows.map(publicUser);
+}
+
+// Cheap aggregate stats for a reseller (no full table load).
+export function resellerStats(resellerId) {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS c, COALESCE(SUM(gb),0) AS g FROM vpn_users WHERE reseller_id = ?')
+    .get(resellerId);
+  return { userCount: row.c, totalGb: row.g };
 }
 
 // Create a VPN user for a reseller.
@@ -112,6 +145,9 @@ export async function createUserForReseller(resellerId, data, actor) {
   const days = plan.days;
 
   const gb = data.gb;
+  const minGb = reseller.min_gb || 1;
+  if (gb < minGb) throw new HttpError(400, `Minimum purchase is ${minGb} GB`);
+  if (gb > reseller.max_gb) throw new HttpError(400, `Maximum purchase is ${reseller.max_gb} GB`);
   const cost = gb * reseller.price_per_gb; // integers => integer
 
   if (reseller.balance < cost) {
@@ -326,6 +362,7 @@ export async function getUserDetails(userId, { reseller = null } = {}) {
   return {
     user: publicUser(row),
     links,
+    subUrl: buildSubUrl(panel, row.sub_id),
     traffic: traffic
       ? {
           up: traffic.up || 0,
@@ -337,4 +374,46 @@ export async function getUserDetails(userId, { reseller = null } = {}) {
         }
       : null,
   };
+}
+
+// Revoke: rotate the client's UUID and subscription id so all previously issued
+// links/subscriptions stop working, then return the freshly generated set.
+export async function revokeUser(userId, { reseller = null, actor = 'admin' } = {}) {
+  const row = getUserRow(userId);
+  if (!row) throw new HttpError(404, 'User not found');
+  if (reseller && row.reseller_id !== reseller.id) throw new HttpError(403, 'Not your user');
+  const panel = getPanelRow(row.panel_id);
+  if (!panel) throw new HttpError(400, 'Panel no longer exists');
+
+  const api = clientForPanel(panel);
+  const fetched = await api.getClient(row.email);
+  if (!fetched || !fetched.client) throw new HttpError(404, 'User missing on panel');
+
+  const newUuid = crypto.randomUUID();
+  const newSubId = crypto.randomUUID();
+  const updated = {
+    ...fetched.client,
+    id: newUuid, // string id (uuid) expected by the update endpoint
+    subId: newSubId,
+    enable: true,
+  };
+  await api.updateClient(row.email, updated);
+
+  getDb()
+    .prepare('UPDATE vpn_users SET uuid = ?, sub_id = ?, updated_at = ? WHERE id = ?')
+    .run(newUuid, newSubId, now(), userId);
+
+  let expected = 0;
+  try {
+    expected = JSON.parse(row.inbound_ids || '[]').length;
+  } catch {
+    expected = 0;
+  }
+  let links = [];
+  try {
+    links = await fetchLinksStable(api, row.email, expected);
+  } catch {
+    /* ignore */
+  }
+  return { user: publicUser(getUserRow(userId)), links, subUrl: buildSubUrl(panel, newSubId) };
 }

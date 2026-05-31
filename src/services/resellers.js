@@ -26,6 +26,7 @@ function publicRow(row, extra = {}) {
     balance: row.balance,
     defaultDays: row.default_days,
     maxGb: row.max_gb,
+    minGb: row.min_gb || 1,
     defaultLimitIp: row.default_limit_ip,
     enabled: !!row.enabled,
     note: row.note || '',
@@ -77,8 +78,8 @@ export function createReseller(data) {
     .prepare(
       `INSERT INTO resellers
        (name, username, token_hash, token_hint, panel_id, allowed_inbounds, price_per_gb,
-        balance, default_days, max_gb, default_limit_ip, enabled, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        balance, default_days, max_gb, min_gb, default_limit_ip, enabled, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       data.name,
@@ -91,6 +92,7 @@ export function createReseller(data) {
       data.balance || 0,
       data.defaultDays,
       data.maxGb,
+      data.minGb != null ? data.minGb : 1,
       data.defaultLimitIp || 0,
       data.enabled ? 1 : 0,
       data.note || '',
@@ -118,7 +120,7 @@ export function updateReseller(id, data) {
   }
   db.prepare(
     `UPDATE resellers SET name = ?, username = ?, panel_id = ?, allowed_inbounds = ?,
-       price_per_gb = ?, default_days = ?, max_gb = ?, default_limit_ip = ?,
+       price_per_gb = ?, default_days = ?, max_gb = ?, min_gb = ?, default_limit_ip = ?,
        enabled = ?, note = ?, updated_at = ? WHERE id = ?`
   ).run(
     data.name !== undefined ? data.name : row.name,
@@ -128,6 +130,7 @@ export function updateReseller(id, data) {
     data.pricePerGb !== undefined ? data.pricePerGb : row.price_per_gb,
     data.defaultDays !== undefined ? data.defaultDays : row.default_days,
     data.maxGb !== undefined ? data.maxGb : row.max_gb,
+    data.minGb !== undefined ? data.minGb : row.min_gb,
     data.defaultLimitIp !== undefined ? data.defaultLimitIp : row.default_limit_ip,
     data.enabled !== undefined ? (data.enabled ? 1 : 0) : row.enabled,
     data.note !== undefined ? data.note : row.note,

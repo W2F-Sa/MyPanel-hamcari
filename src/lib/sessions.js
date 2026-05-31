@@ -41,6 +41,12 @@ export function destroySession(rawId) {
   getDb().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(rawId));
 }
 
+// Extend a session's expiry (sliding sessions).
+export function touchSession(rawId, newExpiresAt) {
+  if (!rawId) return;
+  getDb().prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(newExpiresAt, sha256(rawId));
+}
+
 export function destroyAllForSubject(kind, subjectId) {
   getDb().prepare('DELETE FROM sessions WHERE kind = ? AND subject_id = ?').run(kind, subjectId);
 }
@@ -51,9 +57,10 @@ export function cleanupSessions() {
 
 // Cookie attributes shared by login/logout.
 export function sessionCookieOptions(maxAgeMs) {
+  const secure = !(process.env.MYPANEL_HTTP === '1');
   return {
     httpOnly: true,
-    secure: true,
+    secure,
     sameSite: 'Strict',
     path: '/',
     maxAge: maxAgeMs != null ? maxAgeMs / 1000 : undefined,

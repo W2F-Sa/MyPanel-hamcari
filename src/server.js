@@ -11,6 +11,7 @@ import { createHandler } from './lib/http.js';
 import { applySecurityHeaders, enforceCsrf, cleanupLoginAttempts } from './lib/security.js';
 import { resolveSession } from './middleware/auth.js';
 import { cleanupSessions } from './lib/sessions.js';
+import { refreshSessionIfNeeded } from './routes/helpers.js';
 import { renderPage, serveAsset } from './web.js';
 import { buildAdminRouter } from './routes/admin.js';
 import { buildResellerRouter } from './routes/reseller.js';
@@ -75,16 +76,25 @@ async function handlePortal(ctx, portal, base, sub, router) {
 
 async function dispatch(ctx) {
   applySecurityHeaders(ctx);
-  resolveSession(ctx);
 
   const p = ctx.path;
   const adminPath = cfg.adminPath;
   const resellerPath = cfg.resellerPath;
 
+  // Determine the portal first so the session cookie (namespaced per portal)
+  // is resolved against the right name and sliding-refresh can re-set it.
   if (p === adminPath || p.startsWith(adminPath + '/')) {
+    ctx.portal = 'admin';
+    ctx.portalBase = adminPath;
+    resolveSession(ctx);
+    refreshSessionIfNeeded(ctx);
     return handlePortal(ctx, 'admin', adminPath, p.slice(adminPath.length) || '/', adminRouter);
   }
   if (p === resellerPath || p.startsWith(resellerPath + '/')) {
+    ctx.portal = 'reseller';
+    ctx.portalBase = resellerPath;
+    resolveSession(ctx);
+    refreshSessionIfNeeded(ctx);
     return handlePortal(ctx, 'reseller', resellerPath, p.slice(resellerPath.length) || '/', resellerRouter);
   }
 

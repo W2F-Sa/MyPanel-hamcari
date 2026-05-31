@@ -9,8 +9,11 @@ import { authenticateByToken, getResellerPublic, listTransactions } from '../ser
 import {
   createUserForReseller,
   listUsersForReseller,
+  listUsersPaged,
+  resellerStats,
   deleteUser,
   renewUser,
+  revokeUser,
   getUserDetails,
 } from '../services/users.js';
 import { getPanelRow, clientForPanel } from '../services/panels.js';
@@ -27,6 +30,7 @@ function resellerView(reseller) {
     balance: pub.balance,
     pricePerGb: pub.pricePerGb,
     maxGb: pub.maxGb,
+    minGb: pub.minGb,
     defaultDays: pub.defaultDays,
     defaultLimitIp: pub.defaultLimitIp,
     allowedInbounds: pub.allowedInbounds,
@@ -79,17 +83,17 @@ export function buildResellerRouter() {
 
   r.get('/api/dashboard', (ctx) => {
     const reseller = requireReseller(ctx);
-    const users = listUsersForReseller(reseller.id);
-    const totalGb = users.reduce((a, u) => a + (u.gb || 0), 0);
+    const stats = resellerStats(reseller.id);
+    const recent = listUsersPaged({ resellerId: reseller.id, page: 1, pageSize: 5 });
     ctx.ok({
       profile: resellerView(reseller),
       stats: {
-        userCount: users.length,
-        totalGbSold: totalGb,
+        userCount: stats.userCount,
+        totalGbSold: stats.totalGb,
         balance: reseller.balance,
         pricePerGb: reseller.price_per_gb,
       },
-      recentUsers: users.slice(0, 5),
+      recentUsers: recent.items,
     });
   });
 
@@ -129,32 +133,45 @@ export function buildResellerRouter() {
 
   r.get('/api/users', (ctx) => {
     const reseller = requireReseller(ctx);
-    ctx.ok(listUsersForReseller(reseller.id));
+    const page = asInt(ctx.query.page, 'page', { min: 1, def: 1 });
+    const pageSize = asInt(ctx.query.pageSize, 'pageSize', { min: 1, max: 200, def: 25 });
+    const search = asString(ctx.query.search, 'search', { required: false, max: 120 });
+    ctx.ok(listUsersPaged({ resellerId: reseller.id, page, pageSize, search }));
   });
 
   r.post('/api/users', async (ctx) => {
     const reseller = requireReseller(ctx);
     const name = asString(ctx.body.name, 'name', { required: false, max: 48 });
-    const gb = asInt(ctx.body.gb, 'gb', { min: 1, max: reseller.max_gb });
+    const gb = asInt(ctx.body.gb, 'gb', { min: reseller.min_gb || 1, max: reseller.max_gb });
     const planId = asInt(ctx.body.planId, 'planId', { min: 1 });
     const limitIp = asInt(ctx.body.limitIp, 'limitIp', { min: 0, max: 1000, def: reseller.default_limit_ip || 0 });
     const result = await createUserForReseller(reseller.id, { name, gb, planId, limitIp }, `reseller:${reseller.id}`);
     audit(`reseller:${reseller.id}`, 'user_create', { email: result.user.email, gb, planId }, ctx.clientIp());
-    // include links right away
+    // include links + subscription url right away
     let links = [];
+    let subUrl = '';
     try {
       const details = await getUserDetails(result.user.id, { reseller });
       links = details.links;
+      subUrl = details.subUrl;
     } catch {
       /* ignore */
     }
-    ctx.ok({ ...result, links }, 'User created');
+    ctx.ok({ ...result, links, subUrl }, 'User created');
   });
 
   r.get('/api/users/:id', async (ctx) => {
     const reseller = requireReseller(ctx);
     const id = asInt(ctx.params.id, 'id');
     ctx.ok(await getUserDetails(id, { reseller }));
+  });
+
+  r.post('/api/users/:id/revoke', async (ctx) => {
+    const reseller = requireReseller(ctx);
+    const id = asInt(ctx.params.id, 'id');
+    const result = await revokeUser(id, { reseller, actor: `reseller:${reseller.id}` });
+    audit(`reseller:${reseller.id}`, 'user_revoke', { id }, ctx.clientIp());
+    ctx.ok(result, 'Subscription revoked & regenerated');
   });
 
   r.post('/api/users/:id/renew', async (ctx) => {

@@ -277,6 +277,9 @@
             <input class="input mono" name="baseUrl" value="${esc(p?.baseUrl || '')}" required placeholder="https://host:2087/AbCdEf" dir="ltr" /></div>
           <div class="field"><label>توکن API ${isEdit ? '(برای تغییر، مقدار جدید وارد کنید)' : ''}</label>
             <input class="input mono" name="apiToken" ${isEdit ? '' : 'required'} placeholder="${isEdit ? '••••••••' : 'Bearer token'}" dir="ltr" /></div>
+          <div class="field"><label>آدرس پایه‌ی ساب‌سکریپشن (Subscription)</label>
+            <input class="input mono" name="subBase" value="${esc(p?.subBase || '')}" placeholder="https://your-domain:2096/sub/" dir="ltr" />
+            <div class="hint">از تنظیمات Subscription پنل 3x-ui (آدرس عمومی ساب). لینک هر کاربر = این آدرس + subId. در صورت خالی‌بودن، لینک ساب نمایش داده نمی‌شود.</div></div>
           <label class="switch field" style="display:flex"><input type="checkbox" name="insecure" ${p?.insecure ? 'checked' : ''}/><span class="track"></span><span>اجازه‌ی گواهی self-signed (TLS بدون اعتبارسنجی)</span></label>
           <div id="panel-test-result"></div>
         </form>`,
@@ -292,6 +295,7 @@
       baseUrl: form.baseUrl.value.trim(),
       apiToken: form.apiToken.value.trim(),
       insecure: form.insecure.checked,
+      subBase: form.subBase.value.trim(),
     });
     back.querySelector('#panel-test').onclick = async () => {
       const r = back.querySelector('#panel-test-result');
@@ -374,10 +378,11 @@
           </div>
           <div class="field"><label>اینباندهای مجاز برای فروش</label><div id="r-inbounds" class="chips"><span class="muted">ابتدا پنل را انتخاب کنید…</span></div></div>
           <div class="row-3">
-            <div class="field"><label>سقف گیگ هر کاربر</label><input class="input" name="maxGb" type="number" step="1" min="1" value="${r?.maxGb ?? 100}" required /></div>
-            <div class="field"><label>روز پیش‌فرض</label><input class="input" name="defaultDays" type="number" step="1" min="0" value="${r?.defaultDays ?? 30}" required /></div>
+            <div class="field"><label>حداقل خرید (گیگ)</label><input class="input" name="minGb" type="number" step="1" min="1" value="${r?.minGb ?? 1}" required /></div>
+            <div class="field"><label>حداکثر خرید (گیگ)</label><input class="input" name="maxGb" type="number" step="1" min="1" value="${r?.maxGb ?? 100}" required /></div>
             <div class="field"><label>محدودیت IP پیش‌فرض</label><input class="input" name="defaultLimitIp" type="number" step="1" min="0" value="${r?.defaultLimitIp ?? 0}" /></div>
           </div>
+          <div class="field"><label>روز پیش‌فرض (برای شارژ مجدد ادمین)</label><input class="input" name="defaultDays" type="number" step="1" min="0" value="${r?.defaultDays ?? 30}" required /></div>
           ${isEdit ? '' : `<div class="field"><label>اعتبار اولیه (تومان)</label><input class="input" name="balance" type="number" step="1" min="0" value="0" /></div>`}
           <div class="field"><label>یادداشت</label><textarea name="note" placeholder="اختیاری">${esc(r?.note || '')}</textarea></div>
           <label class="switch"><input type="checkbox" name="enabled" ${(!isEdit || r.enabled) ? 'checked' : ''}/><span class="track"></span><span>حساب فعال باشد</span></label>
@@ -423,6 +428,7 @@
         pricePerGb: parseInt(form.pricePerGb.value, 10),
         allowedInbounds: [...selectedInbounds],
         maxGb: parseInt(form.maxGb.value, 10),
+        minGb: parseInt(form.minGb.value, 10),
         defaultDays: parseInt(form.defaultDays.value, 10),
         defaultLimitIp: parseInt(form.defaultLimitIp.value, 10) || 0,
         note: form.note.value.trim(),
@@ -510,35 +516,74 @@
   }
 
   // ---------- Users (global) ----------
+  let usersState = { page: 1, pageSize: 25, search: '' };
   async function viewUsers(c) {
-    const [users, resellers] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/resellers')]);
+    const resellers = await api('GET', '/api/resellers');
     const rmap = {}; resellers.forEach((r) => (rmap[r.id] = r.name));
     c.innerHTML = `
       <div class="card">
         <div class="card-h">${ICON.user}<h3>همه‌ی کاربران</h3><div class="grow"></div>
-          <button class="btn btn-sm" id="refresh-users">${ICON.refresh}به‌روزرسانی</button></div>
-        <div class="tbl-wrap">${
-          !users.length ? `<div class="empty">${ICON.user}<div>کاربری ساخته نشده است</div></div>` :
-          `<table><thead><tr><th>ایمیل</th><th>نماینده</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th></tr></thead><tbody>
-          ${users.map((u) => `<tr>
-            <td class="mono">${esc(u.email)}</td>
-            <td>${esc(rmap[u.resellerId] || '—')}</td>
-            <td>${faNum(u.gb)}</td>
-            <td>${fmtDate(u.expiryTime)}</td>
-            <td class="nowrap">${money(u.cost)}</td>
-            <td class="t-actions">
-              <button class="btn btn-sm" data-info="${u.id}">${ICON.link}جزئیات</button>
-              <button class="btn btn-sm icon-btn btn-ghost" data-del="${u.id}" title="حذف">${ICON.trash}</button>
-            </td></tr>`).join('')}</tbody></table>`
-        }</div>
+          <input class="input" id="u-search" placeholder="جست‌وجوی ایمیل/پلن…" style="max-width:240px" value="${esc(usersState.search)}" />
+        </div>
+        <div id="users-body"><div class="spinner"></div></div>
       </div>`;
-    document.getElementById('refresh-users').onclick = () => go('users');
-    c.querySelectorAll('[data-info]').forEach((b) => b.onclick = () => userDetails(b.dataset.info, true));
-    c.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
-      if (await confirmDialog('حذف کاربر', 'این کاربر از پنل حذف شود؟')) {
-        try { await api('POST', `/api/users/${b.dataset.del}/delete`, { refund: false }); toast('کاربر حذف شد', 'ok'); go('users'); }
-        catch (e) { toast(e.message, 'err'); }
+    const body = c.querySelector('#users-body');
+    const searchInput = c.querySelector('#u-search');
+    let tmr = null;
+    searchInput.oninput = () => {
+      clearTimeout(tmr);
+      tmr = setTimeout(() => { usersState.search = searchInput.value.trim(); usersState.page = 1; load(); }, 350);
+    };
+    async function load() {
+      body.innerHTML = '<div class="spinner"></div>';
+      const q = `?page=${usersState.page}&pageSize=${usersState.pageSize}&search=${encodeURIComponent(usersState.search)}`;
+      const data = await api('GET', '/api/users' + q);
+      if (!data.items.length) {
+        body.innerHTML = `<div class="empty">${ICON.user}<div>${usersState.search ? 'نتیجه‌ای یافت نشد' : 'کاربری ساخته نشده است'}</div></div>`;
+        return;
       }
+      body.innerHTML = `<div class="tbl-wrap"><table><thead><tr>
+          <th>ایمیل</th><th>نماینده</th><th>پلن</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th>
+        </tr></thead><tbody>
+        ${data.items.map((u) => `<tr>
+          <td class="mono">${esc(u.email)}</td>
+          <td>${esc(rmap[u.resellerId] || '—')}</td>
+          <td>${u.planName ? `<span class="badge">${esc(u.planName)}</span>` : '—'}</td>
+          <td>${faNum(u.gb)}</td>
+          <td>${fmtDate(u.expiryTime)}</td>
+          <td class="nowrap">${money(u.cost)}</td>
+          <td class="t-actions">
+            <button class="btn btn-sm" data-info="${u.id}">${ICON.link}جزئیات</button>
+            <button class="btn btn-sm icon-btn btn-ghost" data-del="${u.id}" title="حذف">${ICON.trash}</button>
+          </td></tr>`).join('')}</tbody></table></div>
+        ${pager(data)}`;
+      body.querySelectorAll('[data-info]').forEach((b) => b.onclick = () => userDetails(b.dataset.info, true));
+      body.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+        if (await confirmDialog('حذف کاربر', 'این کاربر از پنل حذف شود؟')) {
+          try { await api('POST', `/api/users/${b.dataset.del}/delete`, { refund: false }); toast('کاربر حذف شد', 'ok'); load(); }
+          catch (e) { toast(e.message, 'err'); }
+        }
+      });
+      bindPager(body, (p) => { usersState.page = p; load(); });
+    }
+    await load();
+  }
+
+  // Renders pagination controls; returns HTML. Buttons carry data-page.
+  function pager(data) {
+    const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+    if (pages <= 1) return `<div class="hint mt">مجموع: ${faNum(data.total)} مورد</div>`;
+    return `<div class="flex wrap mt" style="justify-content:space-between">
+      <span class="hint">مجموع ${faNum(data.total)} مورد — صفحه ${faNum(data.page)} از ${faNum(pages)}</span>
+      <div class="flex">
+        <button class="btn btn-sm" data-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>قبلی</button>
+        <button class="btn btn-sm" data-page="${data.page + 1}" ${data.page >= pages ? 'disabled' : ''}>بعدی</button>
+      </div></div>`;
+  }
+  function bindPager(scope, onGo) {
+    scope.querySelectorAll('[data-page]').forEach((b) => {
+      if (b.disabled) return;
+      b.onclick = () => onGo(parseInt(b.dataset.page, 10));
     });
   }
 
@@ -550,6 +595,9 @@
         title: d.user.email,
         size: 'lg',
         bodyHtml: `
+          ${d.subUrl ? `<div class="sectiontitle">لینک اشتراک (Subscription)</div>
+          <div class="link-row"><span class="link-tag">ساب</span>
+            <div class="codebox"><span class="mono">${esc(d.subUrl)}</span><button class="btn btn-sm" data-suburl>${ICON.copy}</button></div></div>` : ''}
           ${t ? `<div class="grid stats" style="margin-bottom:14px">
             <div class="stat"><div class="lbl">مصرف</div><div class="val" style="font-size:18px">${fmtBytes(t.up + t.down)}</div></div>
             <div class="stat"><div class="lbl">حجم کل</div><div class="val" style="font-size:18px">${t.total ? fmtBytes(t.total) : 'نامحدود'}</div></div>
@@ -560,12 +608,21 @@
             <span class="link-tag">لینک ${i + 1}</span>
             <div class="codebox"><span class="mono">${esc(l)}</span><button class="btn btn-sm" data-copy="${i}">${ICON.copy}</button></div>
           </div>`).join('') : '<div class="hint">لینکی موجود نیست</div>'}`,
-        footHtml: isAdmin ? `<button class="btn btn-primary" id="u-renew">شارژ مجدد</button><button class="btn btn-ghost" data-close>بستن</button>` : `<button class="btn btn-ghost" data-close>بستن</button>`,
+        footHtml: isAdmin
+          ? `<button class="btn btn-primary" id="u-renew">شارژ مجدد</button><button class="btn btn-danger" id="u-revoke">${ICON.key}باطل‌کردن</button><button class="btn btn-ghost" data-close>بستن</button>`
+          : `<button class="btn btn-ghost" data-close>بستن</button>`,
       });
       const back = modal._last;
       back.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => copy(d.links[Number(b.dataset.copy)]));
+      const su = back.querySelector('[data-suburl]'); if (su) su.onclick = () => copy(d.subUrl);
       const rn = back.querySelector('#u-renew');
       if (rn) rn.onclick = () => { back._close(); renewModal(d.user, true); };
+      const rv = back.querySelector('#u-revoke');
+      if (rv) rv.onclick = async () => {
+        if (!(await confirmDialog('باطل‌کردن اشتراک', 'UUID و لینک ساب جدید ساخته می‌شود و لینک‌های قبلی از کار می‌افتند. ادامه؟'))) return;
+        try { await api('POST', `/api/users/${id}/revoke`); toast('اشتراک باطل و بازتولید شد', 'ok'); back._close(); userDetails(id, true); }
+        catch (e) { toast(e.message, 'err'); }
+      };
     } catch (e) { toast(e.message, 'err'); }
   }
 
@@ -652,16 +709,30 @@
   }
 
   // ---------- Audit ----------
+  let auditState = { page: 1, pageSize: 50 };
   async function viewAudit(c) {
-    const rows = await api('GET', '/api/audit');
     c.innerHTML = `<div class="card">
       <div class="card-h">${ICON.log}<h3>گزارش فعالیت</h3></div>
-      <div class="tbl-wrap">${
-        !rows.length ? `<div class="empty">رکوردی نیست</div>` :
-        `<table><thead><tr><th>زمان</th><th>کاربر</th><th>عملیات</th><th>جزئیات</th><th>IP</th></tr></thead><tbody>
-        ${rows.map((a) => `<tr><td class="nowrap muted">${fmtDateTime(a.created_at)}</td><td class="mono">${esc(a.actor)}</td><td><span class="badge">${esc(a.action)}</span></td><td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(a.detail)}</td><td class="mono muted">${esc(a.ip)}</td></tr>`).join('')}
-        </tbody></table>`
-      }</div></div>`;
+      <div id="audit-body"><div class="spinner"></div></div></div>`;
+    const body = c.querySelector('#audit-body');
+    async function load() {
+      body.innerHTML = '<div class="spinner"></div>';
+      const data = await api('GET', `/api/audit?page=${auditState.page}&pageSize=${auditState.pageSize}`);
+      const rows = data.items || [];
+      const hasMore = rows.length === auditState.pageSize;
+      body.innerHTML = (!rows.length
+        ? `<div class="empty">رکوردی نیست</div>`
+        : `<div class="tbl-wrap"><table><thead><tr><th>زمان</th><th>کاربر</th><th>عملیات</th><th>جزئیات</th><th>IP</th></tr></thead><tbody>
+          ${rows.map((a) => `<tr><td class="nowrap muted">${fmtDateTime(a.created_at)}</td><td class="mono">${esc(a.actor)}</td><td><span class="badge">${esc(a.action)}</span></td><td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(a.detail)}</td><td class="mono muted">${esc(a.ip)}</td></tr>`).join('')}
+          </tbody></table></div>
+          <div class="flex mt" style="justify-content:flex-end;gap:8px">
+            <button class="btn btn-sm" data-page="${auditState.page - 1}" ${auditState.page <= 1 ? 'disabled' : ''}>قبلی</button>
+            <span class="hint">صفحه ${faNum(auditState.page)}</span>
+            <button class="btn btn-sm" data-page="${auditState.page + 1}" ${hasMore ? '' : 'disabled'}>بعدی</button>
+          </div>`);
+      body.querySelectorAll('[data-page]').forEach((b) => { if (!b.disabled) b.onclick = () => { auditState.page = parseInt(b.dataset.page, 10); load(); }; });
+    }
+    await load();
   }
   function fmtDateTime(ms) {
     try { return new Date(Number(ms)).toLocaleString('fa-IR'); } catch (e) { return ''; }

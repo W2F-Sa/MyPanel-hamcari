@@ -143,12 +143,13 @@
     let plans = [];
     try { plans = await api('GET', '/api/plans'); } catch (e) {}
     const maxGb = ME.maxGb || 100;
+    const minGb = ME.minGb || 1;
     const price = ME.pricePerGb || 0;
     if (!plans.length) {
       c.innerHTML = `<div class="card"><div class="empty">${ICON.coin}<div>هنوز پلنی توسط مدیر تعریف نشده است.<br>تا تعریف پلن، امکان ساخت کاربر نیست.</div></div></div>`;
       return;
     }
-    const initGb = Math.min(10, maxGb);
+    const initGb = Math.min(Math.max(minGb, 10), maxGb);
     c.innerHTML = `
       <div class="card" style="max-width:620px">
         <div class="card-h">${ICON.plus}<h3>ساخت کاربر جدید</h3></div>
@@ -162,10 +163,10 @@
           </div>
           <div class="field"><label>حجم (گیگابایت)</label>
             <div class="gb-pick">
-              <input type="range" id="gb-range" min="1" max="${maxGb}" step="1" value="${initGb}" />
-              <input class="input gb-val" id="gb-num" type="number" min="1" max="${maxGb}" step="1" value="${initGb}" style="min-width:90px" />
+              <input type="range" id="gb-range" min="${minGb}" max="${maxGb}" step="1" value="${initGb}" />
+              <input class="input gb-val" id="gb-num" type="number" min="${minGb}" max="${maxGb}" step="1" value="${initGb}" style="min-width:90px" />
             </div>
-            <div class="hint">حداکثر ${faNum(maxGb)} گیگ — فقط عدد صحیح</div>
+            <div class="hint">حداقل ${faNum(minGb)} و حداکثر ${faNum(maxGb)} گیگ — فقط عدد صحیح</div>
           </div>
           <div class="field"><label>محدودیت IP — صفر = نامحدود</label><input class="input" name="limitIp" type="number" min="0" step="1" value="${ME.defaultLimitIp ?? 0}" /></div>
           <div class="cost-line"><span>هزینه‌ی این کاربر</span><b id="cost">${money(initGb * price)}</b></div>
@@ -178,7 +179,7 @@
     const cost = c.querySelector('#cost');
     const after = c.querySelector('#after');
     const sync = (v) => {
-      let g = parseInt(v, 10); if (isNaN(g) || g < 1) g = 1; if (g > maxGb) g = maxGb;
+      let g = parseInt(v, 10); if (isNaN(g) || g < minGb) g = minGb; if (g > maxGb) g = maxGb;
       range.value = g; num.value = g;
       const cst = g * price;
       cost.textContent = money(cst);
@@ -187,6 +188,7 @@
     };
     range.oninput = () => sync(range.value);
     num.oninput = () => sync(num.value);
+    num.onchange = () => sync(num.value);
     c.querySelector('#create-form').onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = f.querySelector('button[type=submit]');
@@ -200,17 +202,22 @@
       try {
         const r = await api('POST', '/api/users', { name: f.name.value.trim(), gb, planId, limitIp });
         try { const me = await api('GET', '/api/me'); ME = me.identity; refreshBalanceBadge(); } catch (e2) {}
-        showCreated(r.user, r.links);
+        showCreated(r.user, r.links, r.subUrl);
       } catch (err) { toast(err.message, 'err'); btn.disabled = false; btn.innerHTML = ICON.plus + 'ساخت کاربر'; }
     };
   }
 
-  function showCreated(user, links) {
+  function showCreated(user, links, subUrl) {
     modal({
       title: 'کاربر ساخته شد ✓',
       size: 'lg',
       bodyHtml: `
         <div class="cost-line"><span>ایمیل</span><b class="mono">${esc(user.email)}</b></div>
+        ${subUrl ? `<div class="sectiontitle">لینک اشتراک (Subscription) — لینک اصلی برای کاربر</div>
+        <div class="link-row"><span class="link-tag">ساب</span>
+          <div class="codebox"><span class="mono">${esc(subUrl)}</span><button class="btn btn-sm" id="copy-sub">${ICON.copy}</button></div></div>
+        <p class="hint">این تک‌لینک را به کاربر بدهید؛ همه‌ی کانفیگ‌ها را شامل می‌شود و خودکار به‌روز می‌شود.</p>` :
+        `<p class="hint" style="color:#fbbf24">آدرس ساب برای این پنل تنظیم نشده است؛ از پنل مدیر، در ویرایش پنل، «آدرس پایه‌ی ساب» را وارد کنید. فعلاً لینک‌های جداگانه را بدهید.</p>`}
         <div class="sectiontitle">لینک‌های اتصال (${links.length})</div>
         ${links.length ? links.map((l, i) => `<div class="link-row">
           <span class="link-tag">لینک ${i + 1}</span>
@@ -221,23 +228,35 @@
     });
     const back = modal._last;
     back.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => copy(links[Number(b.dataset.copy)]));
+    const cs = back.querySelector('#copy-sub'); if (cs) cs.onclick = () => copy(subUrl);
     const ca = back.querySelector('#copy-all'); if (ca) ca.onclick = () => copy(links.join('\n'));
-    back._resolve && (back._onclose = () => go('users'));
-    // ensure navigation after close
     const obs = new MutationObserver(() => { if (!document.body.contains(back)) { obs.disconnect(); go('users'); } });
     obs.observe(document.getElementById('modal-root'), { childList: true });
   }
 
   // ---------- Users ----------
+  let usersState = { page: 1, pageSize: 25, search: '' };
   async function viewUsers(c) {
-    const users = await api('GET', '/api/users');
     c.innerHTML = `<div class="card">
       <div class="card-h">${ICON.users}<h3>کاربران من</h3><div class="grow"></div>
+        <input class="input" id="u-search" placeholder="جست‌وجو…" style="max-width:200px" value="${esc(usersState.search)}" />
         <button class="btn btn-primary btn-sm" id="new-user">${ICON.plus}کاربر جدید</button></div>
-      <div class="tbl-wrap">${
-        !users.length ? `<div class="empty">${ICON.users}<div>هنوز کاربری نساخته‌اید</div></div>` :
-        `<table><thead><tr><th>ایمیل</th><th>پلن</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th></tr></thead><tbody>
-        ${users.map((u) => `<tr>
+      <div id="users-body"><div class="spinner"></div></div></div>`;
+    document.getElementById('new-user').onclick = () => go('create');
+    const body = c.querySelector('#users-body');
+    const searchInput = c.querySelector('#u-search');
+    let tmr = null;
+    searchInput.oninput = () => { clearTimeout(tmr); tmr = setTimeout(() => { usersState.search = searchInput.value.trim(); usersState.page = 1; load(); }, 350); };
+    async function load() {
+      body.innerHTML = '<div class="spinner"></div>';
+      const q = `?page=${usersState.page}&pageSize=${usersState.pageSize}&search=${encodeURIComponent(usersState.search)}`;
+      const data = await api('GET', '/api/users' + q);
+      if (!data.items.length) {
+        body.innerHTML = `<div class="empty">${ICON.users}<div>${usersState.search ? 'نتیجه‌ای یافت نشد' : 'هنوز کاربری نساخته‌اید'}</div></div>`;
+        return;
+      }
+      body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>ایمیل</th><th>پلن</th><th>گیگ</th><th>انقضا</th><th>هزینه</th><th></th></tr></thead><tbody>
+        ${data.items.map((u) => `<tr>
           <td class="mono">${esc(u.email)}</td>
           <td>${u.planName ? `<span class="badge">${esc(u.planName)}</span>` : '—'}</td>
           <td>${faNum(u.gb)}</td>
@@ -247,17 +266,30 @@
             <button class="btn btn-sm" data-info="${u.id}">${ICON.link}لینک‌ها</button>
             <button class="btn btn-sm" data-renew="${u.id}">${ICON.coin}شارژ</button>
             <button class="btn btn-sm icon-btn btn-ghost" data-del="${u.id}" title="حذف">${ICON.trash}</button>
-          </td></tr>`).join('')}</tbody></table>`
-      }</div></div>`;
-    document.getElementById('new-user').onclick = () => go('create');
-    c.querySelectorAll('[data-info]').forEach((b) => b.onclick = () => userLinks(b.dataset.info));
-    c.querySelectorAll('[data-renew]').forEach((b) => b.onclick = () => renewModal(b.dataset.renew));
-    c.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
-      if (await confirmDialog('حذف کاربر', 'این کاربر حذف شود؟')) {
-        try { await api('POST', `/api/users/${b.dataset.del}/delete`); toast('کاربر حذف شد', 'ok'); go('users'); }
-        catch (e) { toast(e.message, 'err'); }
-      }
-    });
+          </td></tr>`).join('')}</tbody></table></div>
+        ${pager(data)}`;
+      body.querySelectorAll('[data-info]').forEach((b) => b.onclick = () => userLinks(b.dataset.info));
+      body.querySelectorAll('[data-renew]').forEach((b) => b.onclick = () => renewModal(b.dataset.renew));
+      body.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+        if (await confirmDialog('حذف کاربر', 'این کاربر حذف شود؟')) {
+          try { await api('POST', `/api/users/${b.dataset.del}/delete`); toast('کاربر حذف شد', 'ok'); load(); }
+          catch (e) { toast(e.message, 'err'); }
+        }
+      });
+      body.querySelectorAll('[data-page]').forEach((b) => { if (!b.disabled) b.onclick = () => { usersState.page = parseInt(b.dataset.page, 10); load(); }; });
+    }
+    await load();
+  }
+
+  function pager(data) {
+    const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+    if (pages <= 1) return `<div class="hint mt">مجموع: ${faNum(data.total)} کاربر</div>`;
+    return `<div class="flex wrap mt" style="justify-content:space-between">
+      <span class="hint">مجموع ${faNum(data.total)} کاربر — صفحه ${faNum(data.page)} از ${faNum(pages)}</span>
+      <div class="flex">
+        <button class="btn btn-sm" data-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>قبلی</button>
+        <button class="btn btn-sm" data-page="${data.page + 1}" ${data.page >= pages ? 'disabled' : ''}>بعدی</button>
+      </div></div>`;
   }
 
   async function userLinks(id) {
@@ -267,6 +299,9 @@
       await modal({
         title: d.user.email, size: 'lg',
         bodyHtml: `
+          ${d.subUrl ? `<div class="sectiontitle">لینک اشتراک (Subscription)</div>
+          <div class="link-row"><span class="link-tag">ساب</span>
+            <div class="codebox"><span class="mono">${esc(d.subUrl)}</span><button class="btn btn-sm" data-suburl>${ICON.copy}</button></div></div>` : ''}
           ${t ? `<div class="grid stats" style="margin-bottom:14px">
             <div class="stat"><div class="lbl">مصرف</div><div class="val" style="font-size:18px">${fmtBytes(t.up + t.down)}</div></div>
             <div class="stat"><div class="lbl">حجم کل</div><div class="val" style="font-size:18px">${t.total ? fmtBytes(t.total) : 'نامحدود'}</div></div>
@@ -276,11 +311,17 @@
           ${d.links.length ? d.links.map((l, i) => `<div class="link-row"><span class="link-tag">لینک ${i + 1}</span>
             <div class="codebox"><span class="mono">${esc(l)}</span><button class="btn btn-sm" data-copy="${i}">${ICON.copy}</button></div></div>`).join('')
             + `<button class="btn mt" id="copy-all">${ICON.copy}کپی همه</button>` : '<div class="hint">لینکی موجود نیست</div>'}`,
-        footHtml: `<button class="btn btn-ghost" data-close>بستن</button>`,
+        footHtml: `<button class="btn btn-danger" id="u-revoke">${ICON.key}باطل‌کردن لینک</button><button class="btn btn-ghost" data-close>بستن</button>`,
       });
       const back = modal._last;
       back.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => copy(d.links[Number(b.dataset.copy)]));
+      const su = back.querySelector('[data-suburl]'); if (su) su.onclick = () => copy(d.subUrl);
       const ca = back.querySelector('#copy-all'); if (ca) ca.onclick = () => copy(d.links.join('\n'));
+      back.querySelector('#u-revoke').onclick = async () => {
+        if (!(await confirmDialog('باطل‌کردن لینک', 'لینک ساب و کانفیگ‌های فعلی از کار می‌افتند و لینک‌های جدید ساخته می‌شوند. ادامه؟'))) return;
+        try { await api('POST', `/api/users/${id}/revoke`); toast('لینک‌ها بازتولید شدند', 'ok'); back._close(); userLinks(id); }
+        catch (e) { toast(e.message, 'err'); }
+      };
     } catch (e) { toast(e.message, 'err'); }
   }
 

@@ -1,6 +1,6 @@
 // Admin portal API routes.
 
-import { Router } from '../lib/http.js';
+import { Router, HttpError } from '../lib/http.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { finishLogin, doLogout } from './helpers.js';
 import {
@@ -36,8 +36,10 @@ import {
 import {
   listAllUsers,
   listUsersForReseller,
+  listUsersPaged,
   deleteUser,
   renewUser,
+  revokeUser,
   getUserDetails,
 } from '../services/users.js';
 import { getDb } from '../lib/db.js';
@@ -130,7 +132,8 @@ export function buildAdminRouter() {
     const baseUrl = asString(ctx.body.baseUrl, 'baseUrl', { max: 256 });
     const apiToken = asString(ctx.body.apiToken, 'apiToken', { max: 512 });
     const insecure = asBool(ctx.body.insecure, false);
-    const panel = createPanel({ name, baseUrl, apiToken, insecure, enabled: true });
+    const subBase = asString(ctx.body.subBase, 'subBase', { required: false, max: 256 });
+    const panel = createPanel({ name, baseUrl, apiToken, insecure, subBase, enabled: true });
     audit('admin', 'panel_create', { id: panel.id, name }, ctx.clientIp());
     ctx.ok(panel, 'Panel added');
   });
@@ -152,6 +155,7 @@ export function buildAdminRouter() {
     if (ctx.body.baseUrl !== undefined) patch.baseUrl = asString(ctx.body.baseUrl, 'baseUrl', { max: 256 });
     if (ctx.body.apiToken) patch.apiToken = asString(ctx.body.apiToken, 'apiToken', { max: 512 });
     if (ctx.body.insecure !== undefined) patch.insecure = asBool(ctx.body.insecure);
+    if (ctx.body.subBase !== undefined) patch.subBase = asString(ctx.body.subBase, 'subBase', { required: false, max: 256 });
     if (ctx.body.enabled !== undefined) patch.enabled = asBool(ctx.body.enabled);
     const panel = updatePanel(id, patch);
     audit('admin', 'panel_update', { id }, ctx.clientIp());
@@ -258,7 +262,11 @@ export function buildAdminRouter() {
   // ---- users (global view) ----
   r.get('/api/users', (ctx) => {
     requireAdmin(ctx);
-    ctx.ok(listAllUsers());
+    const page = asInt(ctx.query.page, 'page', { min: 1, def: 1 });
+    const pageSize = asInt(ctx.query.pageSize, 'pageSize', { min: 1, max: 200, def: 25 });
+    const search = asString(ctx.query.search, 'search', { required: false, max: 120 });
+    const resellerId = ctx.query.resellerId ? asInt(ctx.query.resellerId, 'resellerId', { min: 1 }) : null;
+    ctx.ok(listUsersPaged({ resellerId, page, pageSize, search }));
   });
 
   r.get('/api/users/:id', async (ctx) => {
@@ -277,6 +285,14 @@ export function buildAdminRouter() {
     ctx.ok(result, 'User updated');
   });
 
+  r.post('/api/users/:id/revoke', async (ctx) => {
+    requireAdmin(ctx);
+    const id = asInt(ctx.params.id, 'id');
+    const result = await revokeUser(id, { actor: 'admin' });
+    audit('admin', 'user_revoke', { id }, ctx.clientIp());
+    ctx.ok(result, 'Subscription revoked & regenerated');
+  });
+
   r.post('/api/users/:id/delete', async (ctx) => {
     requireAdmin(ctx);
     const id = asInt(ctx.params.id, 'id');
@@ -289,7 +305,9 @@ export function buildAdminRouter() {
   // ---- audit ----
   r.get('/api/audit', (ctx) => {
     requireAdmin(ctx);
-    ctx.ok(listAudit(200));
+    const page = asInt(ctx.query.page, 'page', { min: 1, def: 1 });
+    const pageSize = asInt(ctx.query.pageSize, 'pageSize', { min: 1, max: 200, def: 50 });
+    ctx.ok({ items: listAudit(pageSize, (page - 1) * pageSize), page, pageSize });
   });
 
   // ---- plans (admin-defined durations) ----
@@ -349,6 +367,8 @@ function parseResellerBody(ctx, isCreate) {
     out.defaultDays = asInt(ctx.body.defaultDays, 'defaultDays', { min: 0, def: 30 });
   if (isCreate || ctx.body.maxGb !== undefined)
     out.maxGb = asInt(ctx.body.maxGb, 'maxGb', { min: 1, max: 100000, def: cfg.maxGbPerUser });
+  if (isCreate || ctx.body.minGb !== undefined)
+    out.minGb = asInt(ctx.body.minGb, 'minGb', { min: 1, max: 100000, def: 1 });
   if (isCreate || ctx.body.defaultLimitIp !== undefined)
     out.defaultLimitIp = asInt(ctx.body.defaultLimitIp, 'defaultLimitIp', { min: 0, def: 0 });
   if (isCreate || ctx.body.note !== undefined)
@@ -358,6 +378,9 @@ function parseResellerBody(ctx, isCreate) {
     out.enabled = asBool(ctx.body.enabled, true);
   } else if (ctx.body.enabled !== undefined) {
     out.enabled = asBool(ctx.body.enabled);
+  }
+  if (out.minGb !== undefined && out.maxGb !== undefined && out.minGb > out.maxGb) {
+    throw new HttpError(400, 'Minimum GB cannot exceed maximum GB');
   }
   return out;
 }

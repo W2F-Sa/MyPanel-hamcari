@@ -31,6 +31,7 @@ function publicRow(row) {
     id: row.id,
     name: row.name,
     baseUrl: row.base_url,
+    subBase: row.sub_base || '',
     enabled: !!row.enabled,
     insecure: !!row.insecure,
     lastStatus: row.last_status,
@@ -40,6 +41,17 @@ function publicRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+// Build the public subscription URL for a subId using the panel's configured
+// subscription base (e.g. "https://sub.example.com:2096/sub/"). Returns '' when
+// not configured.
+export function buildSubUrl(panelRow, subId) {
+  if (!panelRow || !subId) return '';
+  let base = (panelRow.sub_base || '').trim();
+  if (!base) return '';
+  if (!base.endsWith('/')) base += '/';
+  return base + encodeURIComponent(subId);
 }
 
 export function listPanels() {
@@ -61,20 +73,20 @@ export function clientForPanel(row) {
   return new XuiClient(row.base_url, token, { insecure: !!row.insecure });
 }
 
-export function createPanel({ name, baseUrl, apiToken, insecure = false, enabled = true }) {
+export function createPanel({ name, baseUrl, apiToken, insecure = false, enabled = true, subBase = '' }) {
   const url = normalizeBaseUrl(baseUrl);
   if (!apiToken) throw new HttpError(400, 'API token is required');
   const ts = now();
   const info = getDb()
     .prepare(
-      `INSERT INTO panels (name, base_url, api_token_enc, enabled, insecure, last_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'unknown', ?, ?)`
+      `INSERT INTO panels (name, base_url, api_token_enc, enabled, insecure, sub_base, last_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'unknown', ?, ?)`
     )
-    .run(name, url, encryptSecret(apiToken), enabled ? 1 : 0, insecure ? 1 : 0, ts, ts);
+    .run(name, url, encryptSecret(apiToken), enabled ? 1 : 0, insecure ? 1 : 0, (subBase || '').trim(), ts, ts);
   return getPanelPublic(info.lastInsertRowid);
 }
 
-export function updatePanel(id, { name, baseUrl, apiToken, insecure, enabled }) {
+export function updatePanel(id, { name, baseUrl, apiToken, insecure, enabled, subBase }) {
   const row = getPanelRow(id);
   if (!row) throw new HttpError(404, 'Panel not found');
   const url = baseUrl !== undefined ? normalizeBaseUrl(baseUrl) : row.base_url;
@@ -82,7 +94,7 @@ export function updatePanel(id, { name, baseUrl, apiToken, insecure, enabled }) 
   const tokenEnc = apiToken ? encryptSecret(apiToken) : row.api_token_enc;
   getDb()
     .prepare(
-      `UPDATE panels SET name = ?, base_url = ?, api_token_enc = ?, insecure = ?, enabled = ?, updated_at = ?
+      `UPDATE panels SET name = ?, base_url = ?, api_token_enc = ?, insecure = ?, enabled = ?, sub_base = ?, updated_at = ?
        WHERE id = ?`
     )
     .run(
@@ -91,6 +103,7 @@ export function updatePanel(id, { name, baseUrl, apiToken, insecure, enabled }) 
       tokenEnc,
       insecure !== undefined ? (insecure ? 1 : 0) : row.insecure,
       enabled !== undefined ? (enabled ? 1 : 0) : row.enabled,
+      subBase !== undefined ? (subBase || '').trim() : row.sub_base,
       now(),
       id
     );
